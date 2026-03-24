@@ -5,8 +5,8 @@ import uuid
 
 # --- 1. DATABASE & AI SETUP ---
 # Replace these with the keys from your Supabase dashboard
-SUPABASE_URL = "YOUR_SUPABASE_URL_HERE"
-SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY_HERE"
+SUPABASE_URL = "https://tehvjosqerimjsomzfrs.supabase.co"
+SUPABASE_KEY = "sb_publishable_VxRDPe0E8-u3lMeyCsN7RA_ajjKQ_zb"
 GROQ_KEY = "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"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
