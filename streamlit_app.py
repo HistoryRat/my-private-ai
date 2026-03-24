@@ -19,9 +19,28 @@ if "session_id" not in st.session_state:
 
 with st.sidebar:
     st.title("📂 Saved Chats")
-    if st.button("➕ New Chat"):
+    
+    if st.button("➕ New Chat", use_container_width=True):
         st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
+
+    st.divider()
+
+    # --- UNDO BUTTON (The "Edit" Fix) ---
+    if st.button("↩️ Undo Last Turn", use_container_width=True):
+        try:
+            # Fetch the two most recent messages for this chat
+            res = supabase.table("chat_history").select("id").eq("session_id", st.session_state.session_id).order("created_at", desc=True).limit(2).execute()
+            if res.data:
+                ids_to_delete = [item['id'] for item in res.data]
+                for record_id in ids_to_delete:
+                    supabase.table("chat_history").delete().eq("id", record_id).execute()
+                st.toast("Last turn deleted!")
+                st.rerun()
+        except:
+            st.error("Nothing to undo.")
+
+    st.divider()
     
     # Fetch list of unique chats from database
     try:
@@ -29,11 +48,14 @@ with st.sidebar:
         if res.data:
             unique_sessions = sorted(list(set([item['session_id'] for item in res.data])))
             for s_id in unique_sessions:
-                if st.button(f"💬 {s_id[:8]}...", key=s_id):
+                label = f"💬 {s_id[:8]}..."
+                if s_id == st.session_state.session_id:
+                    label = f"✨ {s_id[:8]} (Active)"
+                if st.button(label, key=s_id, use_container_width=True):
                     st.session_state.session_id = s_id
                     st.rerun()
-    except Exception as e:
-        st.write("Start typing to save your first chat!")
+    except:
+        st.write("Start typing to save!")
 
 # --- 3. LOAD CHAT FROM DATABASE ---
 st.title(f"🤖 Chat ID: {st.session_state.session_id[:8]}")
@@ -53,15 +75,16 @@ for m in messages:
 
 # --- 4. CHAT & SAVE ---
 if prompt := st.chat_input("Type here..."):
-    # Save User Message to DB immediately
+    # Save User Message to DB
     supabase.table("chat_history").insert({"session_id": st.session_state.session_id, "role": "user", "content": prompt}).execute()
     
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # FIXED: Only send the last 10 messages to Groq to prevent RateLimitErrors
-    # This keeps the 'weight' of the request low (under 12k tokens)
-    memory_window = messages[-10:] if len(messages) > 10 else messages
+    # CRITICAL STABILITY FIX: 
+    # Only send the last 6 messages to stay under the 12k Token Per Minute limit.
+    # This keeps each 'request' light enough so you don't hit the 60s wait.
+    memory_window = messages[-6:] if len(messages) > 6 else messages
     
     try:
         response = client.chat.completions.create(
@@ -77,4 +100,4 @@ if prompt := st.chat_input("Type here..."):
             st.markdown(ans)
             
     except Exception as e:
-        st.error("The 'minute' limit was hit. Please wait 60 seconds and type '.' to refresh.")
+        st.error("The 'minute' limit was hit. Wait 60s and type '.' to retry. If this keeps happening, click 'New Chat'.")
