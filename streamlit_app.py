@@ -26,10 +26,9 @@ with st.sidebar:
 
     st.divider()
 
-    # --- UNDO BUTTON (The "Edit" Fix) ---
+    # --- UNDO BUTTON ---
     if st.button("↩️ Undo Last Turn", use_container_width=True):
         try:
-            # Fetch the two most recent messages for this specific chat
             res = supabase.table("chat_history").select("id").eq("session_id", st.session_state.session_id).order("created_at", desc=True).limit(2).execute()
             if res.data:
                 for record in res.data:
@@ -41,7 +40,6 @@ with st.sidebar:
 
     st.divider()
     
-    # Fetch list of unique chats from database
     try:
         res = supabase.table("chat_history").select("session_id").execute()
         if res.data:
@@ -59,42 +57,48 @@ with st.sidebar:
 # --- 3. LOAD CHAT FROM DATABASE ---
 st.title(f"🤖 Chat ID: {st.session_state.session_id[:8]}")
 
+# We fetch ONLY the messages for the CURRENT session
 def load_messages(s_id):
     try:
-        res = supabase.table("chat_history").select("*").eq("session_id", s_id).order("created_at").execute()
-        return [{"role": r["role"], "content": r["content"]} for r in res.data]
+        res = supabase.table("chat_history").select("role, content").eq("session_id", s_id).order("created_at", desc=False).execute()
+        return res.data if res.data else []
     except:
         return []
 
-messages = load_messages(st.session_state.session_id)
+# Force a clean load
+current_chat_history = load_messages(st.session_state.session_id)
 
-for m in messages:
+for m in current_chat_history:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
 # --- 4. CHAT & SAVE ---
 if prompt := st.chat_input("Type here..."):
-    # Save User Message to DB immediately
-    supabase.table("chat_history").insert({"session_id": st.session_state.session_id, "role": "user", "content": prompt}).execute()
-    
+    # 1. Show user message instantly
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # memory_window keeps the 'weight' of the request low (under 12k tokens)
-    memory_window = messages[-8:] if len(messages) > 8 else messages
+    # 2. Save User Message to DB
+    supabase.table("chat_history").insert({"session_id": st.session_state.session_id, "role": "user", "content": prompt}).execute()
+    
+    # 3. Trim memory to the bone (Last 4 messages only)
+    # This keeps the request size tiny
+    short_memory = current_chat_history[-4:] if len(current_chat_history) > 4 else current_chat_history
     
     try:
+        # 4. Get AI Response
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant", 
-            messages=memory_window + [{"role": "user", "content": prompt}]
+            messages=short_memory + [{"role": "user", "content": prompt}]
         )
         ans = response.choices[0].message.content
         
-        # Save AI Response to DB
+        # 5. Save AI Response to DB
         supabase.table("chat_history").insert({"session_id": st.session_state.session_id, "role": "assistant", "content": ans}).execute()
         
+        # 6. Show AI response
         with st.chat_message("assistant"):
             st.markdown(ans)
             
     except Exception as e:
-        st.error(f"Limit reached. Wait 60s and type '.' to retry. Error: {e}")
+        st.error(f"Rate Limit? Something is up with Groq. Wait 30s. Error: {e}")
