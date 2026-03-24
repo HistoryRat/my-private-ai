@@ -29,12 +29,11 @@ with st.sidebar:
     # --- UNDO BUTTON (The "Edit" Fix) ---
     if st.button("↩️ Undo Last Turn", use_container_width=True):
         try:
-            # Fetch the two most recent messages for this chat
+            # Fetch the two most recent messages for this specific chat
             res = supabase.table("chat_history").select("id").eq("session_id", st.session_state.session_id).order("created_at", desc=True).limit(2).execute()
             if res.data:
-                ids_to_delete = [item['id'] for item in res.data]
-                for record_id in ids_to_delete:
-                    supabase.table("chat_history").delete().eq("id", record_id).execute()
+                for record in res.data:
+                    supabase.table("chat_history").delete().eq("id", record['id']).execute()
                 st.toast("Last turn deleted!")
                 st.rerun()
         except:
@@ -75,20 +74,18 @@ for m in messages:
 
 # --- 4. CHAT & SAVE ---
 if prompt := st.chat_input("Type here..."):
-    # Save User Message to DB
+    # Save User Message to DB immediately
     supabase.table("chat_history").insert({"session_id": st.session_state.session_id, "role": "user", "content": prompt}).execute()
     
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # CRITICAL STABILITY FIX: 
-    # Only send the last 6 messages to stay under the 12k Token Per Minute limit.
-    # This keeps each 'request' light enough so you don't hit the 60s wait.
-    memory_window = messages[-6:] if len(messages) > 6 else messages
+    # memory_window keeps the 'weight' of the request low (under 12k tokens)
+    memory_window = messages[-8:] if len(messages) > 8 else messages
     
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant", 
             messages=memory_window + [{"role": "user", "content": prompt}]
         )
         ans = response.choices[0].message.content
@@ -100,4 +97,4 @@ if prompt := st.chat_input("Type here..."):
             st.markdown(ans)
             
     except Exception as e:
-        st.error("The 'minute' limit was hit. Wait 60s and type '.' to retry. If this keeps happening, click 'New Chat'.")
+        st.error(f"Limit reached. Wait 60s and type '.' to retry. Error: {e}")
