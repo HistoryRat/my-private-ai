@@ -1,85 +1,68 @@
 import streamlit as st
 from groq import Groq
-import os
-import json
-from datetime import datetime
+from supabase import create_client
+import uuid
 
-st.set_page_config(page_title="My Private AI", layout="wide")
+# --- 1. DATABASE & AI SETUP ---
+# Replace these with the keys from your Supabase dashboard
+SUPABASE_URL = "YOUR_SUPABASE_URL_HERE"
+SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY_HERE"
+GROQ_KEY = "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"
 
-# --- 1. SETUP THE BRAIN ---
-client = Groq(api_key="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")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+client = Groq(api_key=GROQ_KEY)
 
-# --- 2. MULTI-CHAT STORAGE ---
-# All chats will be stored in a folder called 'chats'
-if not os.path.exists("chats"):
-    os.makedirs("chats")
+st.set_page_config(page_title="Permanent AI", layout="wide")
 
-def get_chat_list():
-    files = os.listdir("chats")
-    return sorted([f.replace(".json", "") for f in files if f.endswith(".json")], reverse=True)
+# --- 2. SESSION & SIDEBAR ---
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 
-def load_chat(chat_id):
-    path = f"chats/{chat_id}.json"
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
-    return []
-
-def save_chat(chat_id, messages):
-    with open(f"chats/{chat_id}.json", "w") as f:
-        json.dump(messages, f)
-
-# --- 3. SIDEBAR NAVIGATION ---
 with st.sidebar:
-    st.title("📂 Conversations")
-    if st.button("➕ New Chat", use_container_width=True):
-        # Create a unique ID based on timestamp
-        new_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        st.session_state.current_chat = new_id
-        st.session_state.messages = []
+    st.title("📂 Saved Chats")
+    if st.button("➕ New Chat"):
+        st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
-
-    st.divider()
     
-    # List existing chats
-    chats = get_chat_list()
-    for chat in chats:
-        # Show the date/time as a button
-        if st.button(f"💬 {chat}", key=chat, use_container_width=True):
-            st.session_state.current_chat = chat
-            st.session_state.messages = load_chat(chat)
-            st.rerun()
+    # Fetch list of unique chats from database
+    try:
+        res = supabase.table("chat_history").select("session_id").execute()
+        unique_sessions = list(set([item['session_id'] for item in res.data]))
+        for s_id in unique_sessions:
+            if st.button(f"💬 {s_id[:8]}...", key=s_id):
+                st.session_state.session_id = s_id
+                st.rerun()
+    except:
+        st.write("First chat? Start typing to save!")
 
-# --- 4. MAIN CHAT AREA ---
-if "current_chat" not in st.session_state:
-    # Default to a new chat if none selected
-    st.session_state.current_chat = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    st.session_state.messages = []
+# --- 3. LOAD CHAT FROM DATABASE ---
+st.title(f"🤖 Chat ID: {st.session_state.session_id[:8]}")
 
-st.title(f"🤖 Chat: {st.session_state.current_chat}")
+def load_messages(s_id):
+    res = supabase.table("chat_history").select("*").eq("session_id", s_id).order("created_at").execute()
+    return [{"role": r["role"], "content": r["content"]} for r in res.data]
 
-# Display current messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+messages = load_messages(st.session_state.session_id)
 
-# --- 5. INPUT LOGIC ---
-if prompt := st.chat_input("Type something..."):
-    # Add User Message
-    st.session_state.messages.append({"role": "user", "content": prompt})
+for m in messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+
+# --- 4. CHAT & SAVE ---
+if prompt := st.chat_input("Type here..."):
+    # Save User Message to DB
+    supabase.table("chat_history").insert({"session_id": st.session_state.session_id, "role": "user", "content": prompt}).execute()
     with st.chat_message("user"):
         st.markdown(prompt)
 
     # Get AI Response
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=messages + [{"role": "user", "content": prompt}]
+    )
+    ans = response.choices[0].message.content
+    
+    # Save AI Response to DB
+    supabase.table("chat_history").insert({"session_id": st.session_state.session_id, "role": "assistant", "content": ans}).execute()
     with st.chat_message("assistant"):
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
-        )
-        full_response = response.choices[0].message.content
-        st.markdown(full_response)
-    
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
-    
-    # SAVE to the specific file for this chat
-    save_chat(st.session_state.current_chat, st.session_state.messages)
+        st.markdown(ans)
